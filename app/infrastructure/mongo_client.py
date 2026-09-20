@@ -14,12 +14,15 @@ logger = logging.getLogger(__name__)
 
 _client: Optional[MongoClient] = None
 
-
 def connect_to_mongo() -> None:
     global _client
     settings = get_settings()
-    _client = MongoClient(settings.mongo_uri)
-    _client.admin.command("ping")
+    try:
+        _client = MongoClient(settings.mongo_uri)
+        _client.admin.command("ping")
+    except Exception:
+        logger.critical("Could not connect to MongoDB — check MONGO_URI and network access")
+        raise
     logger.info("Connected to MongoDB")
 
 

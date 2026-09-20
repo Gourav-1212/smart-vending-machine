@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.infrastructure.mongo_client import close_mongo_connection, connect_to_mongo, get_database
+from app.routers import products,purchase
 
 settings = get_settings()
 
@@ -29,6 +30,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 register_exception_handlers(app)
+
+app.include_router(products.router)
+app.include_router(purchase.router)
 
 
 @app.get("/health", tags=["infra"])
