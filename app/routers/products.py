@@ -6,7 +6,7 @@ from typing import Dict, List
 from fastapi import APIRouter
 
 from app.models.snack import Snack
-from app.services import product_service
+from app.services import product_service,cash_float_service
 
 router = APIRouter()
 
@@ -23,4 +23,4 @@ def get_status(snack_id: str) -> Snack:
 
 @router.get("/denominations", tags=["products"])
 def get_denominations() -> Dict[int, int]:
-    return product_service.get_denominations()
+    return cash_float_service.get_denominations()

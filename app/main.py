@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.infrastructure.mongo_client import close_mongo_connection, connect_to_mongo, get_database
-from app.routers import products,purchase
+from app.routers import products,purchase,admin
 
 settings = get_settings()
 
@@ -33,6 +33,7 @@ register_exception_handlers(app)
 
 app.include_router(products.router)
 app.include_router(purchase.router)
+app.include_router(admin.router)
 
 
 @app.get("/health", tags=["infra"])
