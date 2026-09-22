@@ -1,0 +1,11 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+pymongo==4.9.2
+
+# trino==0.329.0
+# websockets==13.1
+# apache-airflow==2.10.2
+# pytest==8.3.3
+# httpx==0.27.2
