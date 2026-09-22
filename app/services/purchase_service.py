@@ -1,6 +1,8 @@
 """Purchase service — validates a purchase, works out change, and runs
 the transaction that updates stock, cash float, and records the sale."""
 
+import asyncio
+import logging
 from typing import Dict, List, Optional
 
 from app.core.config import get_settings
@@ -14,7 +16,9 @@ from app.core.exceptions import (
 from app.infrastructure.mongo_client import start_transaction
 from app.models.sale import Sale
 from app.repositories import cash_float_repository, sale_repository, snack_repository
+from app.websocket import event_publisher
 
+logger = logging.getLogger(__name__)
 
 def calculate_change(amount_needed: int, available_coins: Dict[int, int]) -> Optional[Dict[int, int]]:
     """Works out the fewest coins/notes that add up to amount_needed,
@@ -70,6 +74,20 @@ def split_cash_into_denominations(amount: int, denomination_list: List[int]) -> 
             amount_left -= denomination * notes_used
     return breakdown
 
+def _broadcast_inventory_change(
+    snack_id: str, snack_name: str, new_quantity: int, sold_out: bool, crossed_low_stock: bool
+) -> None:
+    """Bridges our sync service code to the async event publisher. A
+    broadcast failure is caught here and never allowed to fail the
+    purchase that triggered it."""
+    try:
+        asyncio.run(
+            event_publisher.publish_inventory_change(
+                snack_id, snack_name, new_quantity, sold_out, crossed_low_stock
+            )
+        )
+    except Exception:
+        logger.exception("Failed to broadcast inventory change after purchase")
 
 def purchase(snack_id: str, cash_amount: int) -> Sale:
     snack = snack_repository.get_by_id(snack_id)
@@ -120,5 +138,19 @@ def purchase(snack_id: str, cash_amount: int) -> Sale:
             change_given=change_breakdown,
         )
         completed_sale = sale_repository.insert(new_sale, session=session)
+        # Transaction has committed successfully — the sale is real. Now,
+        # and only now, tell any connected clients. This runs after the
+        # `with` block ends, so a broadcast failure can never roll back
+        # or fail an already-successful purchase.
+    updated_snack = snack_repository.get_by_id(snack_id)
+    settings_threshold = get_settings().low_stock_threshold
+    crossed_low_stock = updated_snack.quantity <= settings_threshold
+    _broadcast_inventory_change(
+        snack_id=snack_id,
+        snack_name=updated_snack.name,
+        new_quantity=updated_snack.quantity,
+        sold_out=updated_snack.sold_out,
+        crossed_low_stock=crossed_low_stock,
+    )
 
     return completed_sale

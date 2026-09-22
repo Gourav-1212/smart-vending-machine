@@ -1,14 +1,17 @@
 """Product service — everything that reads or changes a product (snack),
 whether triggered by a customer or an operator."""
 
-
+import asyncio
+import logging  
 from typing import Dict, List
 
 from app.core.config import get_settings
 from app.core.exceptions import NotFoundError,InvalidQuantityError
 from app.models.snack import Snack
 from app.repositories import  snack_repository
+from app.websocket import event_publisher
 
+logger = logging.getLogger(__name__)
 
 def list_products() -> List[Snack]:
     return snack_repository.list_all()
@@ -34,6 +37,20 @@ def add_product(name: str, description: str, price: int, quantity: int) -> Snack
         sold_out=(quantity == 0),
     )
     return snack_repository.insert(new_product)
+def _broadcast_inventory_change(
+    snack_id: str, snack_name: str, new_quantity: int, sold_out: bool, crossed_low_stock: bool
+) -> None:
+    """Same sync-to-async bridge used in purchase_service. A broadcast
+    failure here must never fail a restock that already succeeded."""
+    try:
+        asyncio.run(
+            event_publisher.publish_inventory_change(
+                snack_id, snack_name, new_quantity, sold_out, crossed_low_stock
+            )
+        )
+    except Exception:
+        logger.exception("Failed to broadcast inventory change after restock")
+
 
 def restock_product(product_id: str, quantity_to_add: int) -> Snack:
     if quantity_to_add <= 0:
@@ -44,6 +61,19 @@ def restock_product(product_id: str, quantity_to_add: int) -> Snack:
     updated_product = snack_repository.restock(product_id, quantity_to_add)
     if updated_product is None:
         raise NotFoundError("Product not found", reason="No product with that id")
+    # Restock already succeeded and is saved — broadcasting happens
+    # after, same reasoning as the purchase flow: a WebSocket failure
+    # must never affect an already-successful operation.
+    settings = get_settings()
+    crossed_low_stock = updated_product.quantity <= settings.low_stock_threshold
+    _broadcast_inventory_change(
+        snack_id=product_id,
+        snack_name=updated_product.name,
+        new_quantity=updated_product.quantity,
+        sold_out=updated_product.sold_out,
+        crossed_low_stock=crossed_low_stock,
+    )
+
     return updated_product
 
 
