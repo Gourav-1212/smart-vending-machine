@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class Snack(BaseModel):
-    id: Optional[str] = Field(default=None, alias="_id")
+    id: Optional[str] = Field(default=None,  validation_alias="_id")
     name: str
     description: str
     price: int

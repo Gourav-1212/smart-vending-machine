@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class CashFloat(BaseModel):
-    id: Optional[str] = Field(default=None, alias="_id")
+    id: Optional[str] = Field(default=None,  validation_alias="_id")
     denominations: Dict[int, int]
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
