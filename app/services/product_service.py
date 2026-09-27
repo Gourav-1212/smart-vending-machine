@@ -246,3 +246,21 @@ def purchase(snack_id: str, cash_amount: int, threshold: int, quantity: int = 1)
             cash_received=cash_amount,
             change_given=change_breakdown,
         )
+        sale_repository.insert(new_sale, session=session)
+
+
+    updated_snack = snack_repository.get_by_id(snack_id)
+    crossed_low_stock = updated_snack.quantity <= threshold if updated_snack else False
+
+
+    _broadcast_inventory_change(
+        snack_id=snack_id,
+        snack_name=snack.name,
+        new_quantity=updated_snack.quantity if updated_snack else 0,
+        sold_out=updated_snack.sold_out if updated_snack else True,
+        crossed_low_stock=crossed_low_stock,
+    )
+
+
+    logger.info("Purchase transaction completed and inventory broadcast sent.")
+    return new_sale
