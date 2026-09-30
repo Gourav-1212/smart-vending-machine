@@ -24,6 +24,9 @@ def run_query(query: str, params: Sequence[Any] = ()) -> List[Tuple]:
     hanging request."""
     settings = get_settings()
 
+    conn=None
+    cursor=None
+
     try:
         conn = trino.dbapi.connect(
             host=settings.trino_host,
@@ -37,12 +40,21 @@ def run_query(query: str, params: Sequence[Any] = ()) -> List[Tuple]:
         cursor = conn.cursor()
         cursor.execute(query, params)
         rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
         return rows
     except Exception:
-        logger.exception("Trino query failed")
+        logger.error("Trino query failed")
         raise TrinoUnavailableError(
             "Trino unavailable",
             reason="Could not reach Trino to complete this request",
         )
+    finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                logger.warning("Failed to close Trino cursor")
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                logger.warning("Failed to close Trino connection")

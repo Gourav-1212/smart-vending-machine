@@ -10,7 +10,11 @@ from fastapi import APIRouter, Depends, Query
 
 from app.core.security import require_api_key
 from app.schemas.analytics import RevenueResponse, TopSellersResponse
-from app.services import analytics_service
+from app.services import analytics_service,inventory_snapshot
+from app.schemas.snapshots import (
+    DailyInventorySnapshotRangeResponse,
+    DailyInventorySnapshotResponse,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +38,6 @@ def get_revenue(
     """
     logger.info("Received revenue analytics request: start=%s end=%s", start, end)
     result = analytics_service.get_revenue(start=start, end=end)
-    logger.info("Revenue analytics request completed successfully.")
     return result
 
 
@@ -57,6 +60,6 @@ def get_top_sellers(
         "Received top-sellers analytics request: start=%s end=%s limit=%d", start, end, limit
     )
     result = analytics_service.get_top_sellers(start=start, end=end, limit=limit)
-    logger.info("Top-sellers analytics request completed successfully.")
     return result
+
 

@@ -69,7 +69,7 @@ def get_top_sellers(start: date, end: date, limit: int) -> List[Tuple[str, int, 
         f"FROM {TABLE} "
         f"WHERE CAST(sold_at AS DATE) >= DATE '{start}' "
         f"AND CAST(sold_at AS DATE) <= DATE '{end}' "
-        f"GROUP BY snack_name_at_sale "
+        f"GROUP BY snack_id, snack_name_at_sale "
         f"ORDER BY total_revenue DESC "
         f"LIMIT ?"
     )

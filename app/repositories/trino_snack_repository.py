@@ -24,6 +24,7 @@ def _row_to_snack(row: tuple) -> Snack:
         price=row[3],
         quantity=row[4],
         sold_out=row[5],
+        low_stock_threshold=row[6],
     )
 
 
@@ -54,7 +55,7 @@ def list_all(
     logger.debug("Executing catalog search list query against the Trino query engine.")
     where_sql, params = _build_where_clause(name, sold_out)
     query = (
-        f"SELECT CAST(_id AS VARCHAR), name, description, price, quantity, sold_out "
+        f"SELECT CAST(_id AS VARCHAR), name, description, price, quantity, sold_out, low_stock_threshold "
         f"FROM {TABLE} {where_sql} ORDER BY name"
     )
     if limit is not None:
@@ -76,7 +77,7 @@ def get_by_id(snack_id: str) -> Optional[Snack]:
     """Finds and builds a single product instance by executing an explicit ID record search in Trino."""
     logger.debug("Executing individual item query for snack ID: %s against the Trino query engine.", snack_id)
     rows = run_query(
-        f"SELECT CAST(_id AS VARCHAR), name, description, price, quantity, sold_out "
+        f"SELECT CAST(_id AS VARCHAR), name, description, price, quantity, sold_out,low_stock_threshold "
         f"FROM {TABLE} WHERE _id = ObjectId(?)",
         params=(snack_id,),
     )

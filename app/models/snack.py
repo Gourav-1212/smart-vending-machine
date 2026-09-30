@@ -13,6 +13,7 @@ class Snack(BaseModel):
     price: int
     quantity: int
     sold_out: bool = False
+    low_stock_threshold: int = Field(default=3,ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

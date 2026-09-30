@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Smart Vending Machine API"
     app_port: int = Field(default=8000)
-    log_level: str = Field(default="INFO")
+    log_level: str = Field(default="DEBUG")
 
     mongo_uri: str 
     mongo_db_name: str = Field(default="vending_machine")

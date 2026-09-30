@@ -1,6 +1,8 @@
 """Direct MongoDB access for the snacks collection."""
 
 import logging
+from datetime import datetime,timezone
+import re
 from typing import List, Optional
 
 from bson import ObjectId
@@ -44,13 +46,15 @@ def list_all() -> List[Snack]:
 
 
 def list_low_stock(
-    threshold: int, name: Optional[str] = None, limit: Optional[int] = None, offset: int = 0
+     name: Optional[str] = None, limit: Optional[int] = None, offset: int = 0
 ) -> List[Snack]:
     """Retrieves a sorted, paginated list of snacks running below a configured limit threshold."""
-    logger.debug("Querying low stock snack list against threshold baseline limit: %d", threshold)
-    query_filter: dict = {"quantity": {"$lte": threshold}}
+    logger.debug("Querying low stock snack list against threshold baseline limit")
+    query_filter: dict = {
+        "$expr": {"$lte": ["$quantity", "$low_stock_threshold"]}
+    }
     if name:
-        query_filter["name"] = {"$regex": name, "$options": "i"}
+        query_filter["name"] = {"$regex": re.escape(name), "$options": "i"}
 
     cursor = get_database()[COLLECTION_NAME].find(query_filter).sort("name", 1)
     if limit is not None:
@@ -58,12 +62,14 @@ def list_low_stock(
     return [_to_snack(doc) for doc in cursor]
 
 
-def count_low_stock(threshold: int, name: Optional[str] = None) -> int:
+def count_low_stock( name: Optional[str] = None) -> int:
     """Counts the total number of snack records running below a configured limit threshold."""
-    logger.debug("Counting total low stock snack documents against threshold baseline limit: %d", threshold)
-    query_filter: dict = {"quantity": {"$lte": threshold}}
+    logger.debug("Counting total low stock snack documents against threshold baseline limit")
+    query_filter: dict = {
+        "$expr": {"$lte": ["$quantity", "$low_stock_threshold"]}
+    }
     if name:
-        query_filter["name"] = {"$regex": name, "$options": "i"}
+        query_filter["name"] = {"$regex": re.escape(name), "$options": "i"}
     return get_database()[COLLECTION_NAME].count_documents(query_filter)
 
 
@@ -84,10 +90,11 @@ def try_decrement_stock(snack_id: str, requested_quantity: int, session: ClientS
     """
     logger.debug("Attempting atomic stock deduction update for snack ID: %s", snack_id)
     db = get_database()[COLLECTION_NAME]
+    now=datetime.now(timezone.utc)
 
     result = db.update_one(
         {"_id": ObjectId(snack_id), "quantity": {"$gte": requested_quantity}},
-        {"$inc": {"quantity": -requested_quantity}},
+        {"$inc": {"quantity": -requested_quantity},"$set": {"updated_at": now}},
         session=session,
     )
     if result.modified_count == 0:
@@ -96,17 +103,23 @@ def try_decrement_stock(snack_id: str, requested_quantity: int, session: ClientS
 
     db.update_one(
         {"_id": ObjectId(snack_id), "quantity": 0},
-        {"$set": {"sold_out": True}},
+        {"$set": {"sold_out": True,"updated_at":now}},
         session=session,
     )
     return True
 
 
-def restock(snack_id: str, quantity: int) -> Optional[Snack]:
+def restock(snack_id: str, quantity: int,low_stock_threshold:Optional[int]) -> Optional[Snack]:
     """Increments stock counts and clears the sold-out flag for a specific snack item."""
     logger.debug("Applying stock increment restock changes to snack ID: %s", snack_id)
+    now=datetime.now(timezone.utc)
+
+    update_doc: dict = {"sold_out": False, "updated_at": now}
+    if low_stock_threshold is not None:
+        update_doc["low_stock_threshold"] = low_stock_threshold
+
     get_database()[COLLECTION_NAME].update_one(
         {"_id": ObjectId(snack_id)},
-        {"$inc": {"quantity": quantity}, "$set": {"sold_out": False}},
+        {"$inc": {"quantity": quantity}, "$set":update_doc},
     )
     return get_by_id(snack_id)

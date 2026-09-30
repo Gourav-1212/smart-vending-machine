@@ -44,9 +44,15 @@ class InvalidQuantityError(BusinessRuleError):
 class NotFoundError(VendingMachineError):
     status_code = 404
 
+class ConflictError(VendingMachineError):
+    status_code = 409
 
-class ConcurrencyConflictError(BusinessRuleError):
-    status_code = 400
+
+class ConcurrencyConflictError(ConflictError):
+    pass
+
+class DuplicateResourceError(ConflictError):
+    pass
 
 
 class AuthenticationError(VendingMachineError):
@@ -69,7 +75,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(VendingMachineError)
     async def handle_vending_machine_error(request: Request, exc: VendingMachineError) -> JSONResponse:
         if exc.status_code >= 500:
-            logger.exception("Infrastructure error on %s", request.url.path)
+            logger.error("Infrastructure error on %s", request.url.path)
         else:
             logger.info("Business error on %s: %s", request.url.path, exc.reason)
 
@@ -80,7 +86,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled exception on %s", request.url.path)
+        logger.error("Unhandled exception on %s", request.url.path)
         return JSONResponse(
             status_code=500,
             content={"error": "internal_server_error", "reason": "Something went wrong. Please try again."},

@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class PurchaseRequest(BaseModel):
     snack_id: str
-    cash_amount: int
+    cash_amount: int = Field(..., gt=0, description="cash inserted in currency unit (must be positive)")
     quantity: int = Field(default=1, ge=1, description="Number of units to purchase (minimum 1)")
 
 

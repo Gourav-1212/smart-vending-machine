@@ -7,14 +7,15 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from app.models.snack import Snack
-from app.services import machine_config_serviceg, product_service
+from app.services import product_service
 from app.schemas.pagination import PaginatedResponse, get_pagination
 from app.core.route_validators import validate_snack_id
-from app.schemas.snack import SnackMinimal, SnackDetailed
+from app.schemas.snack.snack_request import AddSnackRequest,RestockRequest
+from app.schemas.snack.snack_response import SnackDetailed,SnackMinimal
 from app.schemas.purchase import PurchaseRequest, PurchaseResponse
 from app.core.security import require_api_key
 
-from app.schemas.snack import (
+from app.schemas.snack.snack_request import (
     AddSnackRequest,
     RestockRequest
 )
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["products"])
 
 
-@router.post("/add-snacks", response_model=Snack, dependencies=[Depends(require_api_key)])
+@router.post("/add-snack", response_model=SnackDetailed, dependencies=[Depends(require_api_key)])
 def add_snack(request: AddSnackRequest) -> Snack:
     """Creates and inserts a brand new snack item into the product catalog."""
     logger.info("Adding new snack: %s", request.name)
@@ -35,29 +36,36 @@ def add_snack(request: AddSnackRequest) -> Snack:
     return result
 
 
-@router.patch("/snacks/{snack_id}/restock", response_model=Snack, dependencies=[Depends(require_api_key)])
+@router.patch("/snack/{snack_id}/restock", response_model=SnackDetailed, dependencies=[Depends(require_api_key)])
 @validate_snack_id("snack_id")
 def restock_snack(snack_id: str, request: RestockRequest) -> Snack:
     """Increases the current inventory quantity for an existing snack item."""
-    logger.info("Processing product inventory restock for ID: %s", snack_id)
-    live_threshold = machine_config_serviceg.get_low_stock_threshold()  
-    result = product_service.restock_product(snack_id, request, threshold=live_threshold)
+    logger.info("Processing product inventory restock for ID: %s", snack_id) 
+    result = product_service.restock_product(snack_id, request)
     logger.info("Product inventory restock completed.")
     return result
 
 
 @router.get("/products", response_model=PaginatedResponse[SnackMinimal])
 def get_products(
-    name: Optional[str] = Query(default=None, description="Filter by name (partial match)"),
+    name: Optional[str] = Query(
+        default=None,
+        min_length=1,
+        max_length=100,
+        pattern=r"^.*\S.*$",
+        description="Filter by name (partial match, non-empty)",
+        error_messages={"string_pattern_mismatch": "The name can't be space only"},
+    ),
     sold_out: Optional[bool] = Query(default=None, description="Filter by sold-out status"),
     pagination: tuple = Depends(get_pagination),
 ) -> PaginatedResponse[SnackMinimal]:
     """Retrieves a paginated list of products, optionally filtered by name or stock status."""
     page, page_size, _ = pagination
     logger.info("Executing product catalog query for page %d.", page)
+    clean_name = name.strip() if name else None
     
     result = product_service.list_products(
-        name=name,
+        name=clean_name,
         sold_out=sold_out,
         page=page,
         page_size=page_size,
@@ -66,13 +74,13 @@ def get_products(
     return result
 
 
-@router.get("/products/{snack_id}", response_model=SnackDetailed)
+@router.get("/product/{snack_id}", response_model=SnackDetailed)
 @validate_snack_id("snack_id")
-def get_status(snack_id: str) -> Snack:
+def get_product_details(snack_id: str) -> Snack:
     """Retrieves full information and stock status details for a single snack item."""
     logger.info("Retrieving product status for ID: %s", snack_id)
 
-    result = product_service.get_product(snack_id)
+    result = product_service.get_product_details(snack_id)
 
     logger.info("Product status retrieved successfully.")
     return result
@@ -83,43 +91,29 @@ def get_status(snack_id: str) -> Snack:
 def make_purchase(request: PurchaseRequest) -> PurchaseResponse:
     """Handles dispensing a snack by validating cash input, deducting stock, and returning change."""
     logger.info("Processing purchase transaction for product ID: %s", request.snack_id)
-    
-    live_threshold = machine_config_serviceg.get_low_stock_threshold()
-    sale = product_service.purchase(
-        snack_id=request.snack_id, 
-        cash_amount=request.cash_amount, 
-        threshold=live_threshold,
-        quantity=request.quantity
-    )
-    
-    logger.info("Purchase transaction completed successfully.")
-    return PurchaseResponse(
-        snack_id=sale.snack_id,
-        snack_name=sale.snack_name_at_sale,
-        quantity=sale.quantity,
-        unit_price=sale.unit_price_at_sale,
-        total_cost=sale.total_amount,
-        cash_received=sale.cash_received,
-        change_given=sale.change_given,
+    return product_service.purchase(
+        snack_id= request.snack_id,
+        cash_amount=request.cash_amount,
+        quantity=request.quantity,
     )
 
 
-@router.get("/low-stock", response_model=PaginatedResponse[Snack], dependencies=[Depends(require_api_key)])
+@router.get("/low-stock", response_model=PaginatedResponse[SnackDetailed], dependencies=[Depends(require_api_key)])
 def get_low_stock(
-    name: Optional[str] = Query(default=None, description="Filter by name (partial match)"),
+    name: Optional[str] = Query(
+        default=None, 
+        min_length=1,
+        max_length=100,
+        pattern=r"^.*\S.*$",
+        description="Filter by name (partial match, non-empty)"
+    ),
     pagination: tuple = Depends(get_pagination),
-) -> PaginatedResponse[Snack]:
+) -> PaginatedResponse[SnackDetailed]:
     """Retrieves a paginated list of all products currently running below the low stock threshold limit."""
     page, page_size, _ = pagination
     logger.info("Executing low-stock warning check.")
-    
-    live_threshold = machine_config_serviceg.get_low_stock_threshold()
-    result = product_service.get_low_stock_products(
-        threshold=live_threshold,
-        name=name, 
-        page=page, 
-        page_size=page_size
+    return product_service.get_low_stock_products(
+        name=name,
+        page=page,
+        page_size=page_size,
     )
-    
-    logger.info("Low-stock warning check completed.")
-    return result

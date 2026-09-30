@@ -1,15 +1,15 @@
 """Product service — handles catalog searching, product management, stock replenishment, and checkout transactions."""
-
-import asyncio
 import logging  
 from typing import List, Optional, Dict
+from anyio.from_thread import run
 
-from app.core.exceptions import NotFoundError, InvalidQuantityError
+from app.core.exceptions import NotFoundError
 from app.models.snack import Snack
 from app.websocket import event_publisher
 from app.repositories import snack_repository, trino_snack_repository, cash_float_repository, sale_repository
 from app.schemas.pagination import PaginatedResponse
-from app.schemas.snack import AddSnackRequest, RestockRequest
+from app.schemas.snack.snack_request import AddSnackRequest,RestockRequest
+from app.schemas.purchase import PurchaseResponse
 from app.core.config import get_settings
 
 from app.infrastructure.mongo_client import start_transaction
@@ -18,6 +18,7 @@ from app.models.sale import Sale
 from app.core.exceptions import (
     ChangeNotMakeableError,
     ConcurrencyConflictError,
+    DuplicateResourceError,
     InsufficientCashError,
     NotFoundError,
     OutOfStockError,
@@ -55,7 +56,7 @@ def list_all_products() -> List[Snack]:
     return trino_snack_repository.list_all()
 
 
-def get_product(snack_id: str) -> Snack:
+def get_product_details(snack_id: str) -> Snack:
     """Finds and returns a single product using its unique ID."""
     logger.debug("Fetching single product by ID: %s", snack_id)
     snack = trino_snack_repository.get_by_id(snack_id)
@@ -69,7 +70,7 @@ def add_product(request: AddSnackRequest) -> Snack:
     logger.info("Checking if product name already exists before adding.")
     existing = snack_repository.get_by_name(request.name)
     if existing is not None:
-        raise InvalidQuantityError(
+        raise DuplicateResourceError(
             "Snack already exists",
             reason=f"A snack named '{request.name}' already exists — use restock instead",
         )
@@ -79,6 +80,7 @@ def add_product(request: AddSnackRequest) -> Snack:
         description=request.description,
         price=request.price,
         quantity=request.quantity,
+        low_stock_threshold=request.low_stock_threshold,
         sold_out=(request.quantity == 0),
     )
     result = snack_repository.insert(new_product)
@@ -92,23 +94,26 @@ def _broadcast_inventory_change(
     """Sends immediate inventory adjustment updates to connected live streaming clients."""
     try:
         logger.debug("Sending updated inventory details to live WebSocket channel.")
-        asyncio.run(
-            event_publisher.publish_inventory_change(
-                snack_id, snack_name, new_quantity, sold_out, crossed_low_stock
-            )
+        run(
+            event_publisher.publish_inventory_change,
+            snack_id, 
+            snack_name,
+            new_quantity,
+            sold_out, 
+            crossed_low_stock
         )
     except Exception:
         logger.exception("Failed to send inventory update alert via WebSocket.")
 
 
-def restock_product(product_id: str, request: RestockRequest, threshold: int) -> Snack:
+def restock_product(product_id: str, request: RestockRequest) -> Snack:
     """Increases the current inventory level of a specific snack item and pushes live updates."""
     logger.info("Adding new stock quantities for product ID: %s", product_id)
-    updated_product = snack_repository.restock(product_id, request.quantity)
+    updated_product = snack_repository.restock(product_id, request.quantity,low_stock_threshold=request.low_stock_threshold)
     if updated_product is None:
         raise NotFoundError("Product not found", reason="No product with that id")
     
-    crossed_low_stock = updated_product.quantity <= threshold
+    crossed_low_stock = updated_product.quantity <= updated_product.low_stock_threshold
     if crossed_low_stock:
         logger.warning("Product restocked, but total count is still below low stock alert limit.")
     
@@ -125,15 +130,15 @@ def restock_product(product_id: str, request: RestockRequest, threshold: int) ->
 
 
 def get_low_stock_products(
-    threshold: int, name: Optional[str] = None, page: int = 1, page_size: int = 20
+     name: Optional[str] = None, page: int = 1, page_size: int = 20
 ) -> PaginatedResponse[Snack]:
     """Finds all products whose current quantities have fallen below the warning limit."""
-    logger.debug("Fetching items running lower than threshold boundary limit: %d", threshold)
+    logger.debug("Fetching items running lower than threshold boundary limit")
     offset = (page - 1) * page_size
     items = snack_repository.list_low_stock(
-        threshold, name=name, limit=page_size, offset=offset
+         name=name, limit=page_size, offset=offset
     )
-    total = snack_repository.count_low_stock(threshold, name=name)
+    total = snack_repository.count_low_stock( name=name)
     return PaginatedResponse(
         items=items,
         page=page,
@@ -189,7 +194,7 @@ def split_cash_into_denominations(amount: int, denomination_list: List[int]) -> 
     return breakdown
 
 
-def purchase(snack_id: str, cash_amount: int, threshold: int, quantity: int = 1) -> Sale:
+def purchase(snack_id: str, cash_amount: int, quantity: int = 1) -> PurchaseResponse:
     """Processes a user checkout lifecycle by validating funds, reserving inventory, and calculating change inside a transaction."""
     logger.info("Starting checks to validate purchase request availability parameters.")
     snack = snack_repository.get_by_id(snack_id)
@@ -201,10 +206,16 @@ def purchase(snack_id: str, cash_amount: int, threshold: int, quantity: int = 1)
     if cash_amount < total_price:
         raise InsufficientCashError(
             "Insufficient cash",
-            reason=f"Price is {snack.price}, received {cash_amount}",
+            reason=f"Total cost is {total_price}, received {cash_amount}",
         )
 
-    if snack.quantity < quantity or snack.sold_out:
+    if snack.quantity < quantity:
+        raise OutOfStockError(
+             "Insufficient stock",
+              reason=f"Requested {quantity} units, but only {snack.quantity} units of {snack.name} are available",
+        )
+
+    if snack.sold_out or snack.quantity == 0:
         raise OutOfStockError("Out of stock", reason=f"{snack.name} is sold out")
 
     change_owed = cash_amount - total_price
@@ -250,7 +261,7 @@ def purchase(snack_id: str, cash_amount: int, threshold: int, quantity: int = 1)
 
 
     updated_snack = snack_repository.get_by_id(snack_id)
-    crossed_low_stock = updated_snack.quantity <= threshold if updated_snack else False
+    crossed_low_stock = updated_snack.quantity <= updated_snack.low_stock_threshold if updated_snack else False
 
 
     _broadcast_inventory_change(
@@ -263,4 +274,12 @@ def purchase(snack_id: str, cash_amount: int, threshold: int, quantity: int = 1)
 
 
     logger.info("Purchase transaction completed and inventory broadcast sent.")
-    return new_sale
+    return PurchaseResponse(
+        snack_id=new_sale.snack_id,
+        snack_name=new_sale.snack_name_at_sale,
+        quantity=new_sale.quantity,
+        unit_price=new_sale.unit_price_at_sale,
+        total_cost=new_sale.total_amount,
+        cash_received=new_sale.cash_received,
+        change_given=new_sale.change_given,
+    )

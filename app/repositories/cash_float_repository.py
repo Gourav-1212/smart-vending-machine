@@ -16,18 +16,23 @@ COLLECTION_NAME = "cash_float"
 SINGLETON_ID = "singleton"
 
 
+def _to_int_keys(d: dict) -> Dict[int, int]:
+    """Converts dictionary keys to integers."""
+    return {int(k): v for k, v in d.items()}
+
+
+def _to_str_keys(d: dict) -> Dict[str, int]:
+    """Converts dictionary keys to strings for MongoDB compatibility."""
+    return {str(k): v for k, v in d.items()}
+
+
 def _to_cash_float(doc: dict) -> CashFloat:
     """Converts a database dictionary document into a typed CashFloat model instance.
     
     Transforms MongoDB string keys back into standard integer denominations.
     """
     doc["_id"] = str(doc["_id"])
-    raw_denominations = doc["denominations"]
-    clean_denominations = {}
-    for key, value in raw_denominations.items():
-        numeric_key = int(key)
-        clean_denominations[numeric_key] = value
-    doc["denominations"] = clean_denominations
+    doc["denominations"] = _to_int_keys(doc.get("denominations",{}))
     return CashFloat(**doc)
 
 
@@ -41,13 +46,9 @@ def get() -> Optional[CashFloat]:
 def initialize(denominations: Dict[int, int]) -> CashFloat:
     """Creates the initial cash float document with starting currency quantities."""
     logger.debug("Initializing fresh cash float document in database.")
-    string_denominations = {}
-    for key, value in denominations.items():
-        string_key = str(key)
-        string_denominations[string_key] = value
     doc = {
         "_id": SINGLETON_ID,           
-        "denominations": string_denominations
+        "denominations": _to_str_keys(denominations),
     }
     
     get_database()[COLLECTION_NAME].insert_one(doc)
@@ -57,12 +58,13 @@ def initialize(denominations: Dict[int, int]) -> CashFloat:
 def update_cash_inventory(inventory_changes: Dict[int, int], session: Optional[ClientSession] = None) -> None:
     """Increments or decrements cash denomination totals inside an active session database transaction."""
     logger.debug("Applying inventory modifications to cash float document.")
-    mongodb_update_fields = {}
-    for cash_value, quantity_changed in inventory_changes.items():
-        target_field_path = f"denominations.{cash_value}"
-        mongodb_update_fields[target_field_path] = quantity_changed
+    mongodb_update_fields = {
+        f"denominations.{k}": v for k, v in inventory_changes.items()
+    }
     get_database()[COLLECTION_NAME].update_one(
         {"_id": SINGLETON_ID}, 
         {"$inc": mongodb_update_fields}, 
         session=session
     )
+
+
