@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-catalog
+  namespace: trino
+data:
+  mongodb.properties: |
+    connector.name=mongodb
+    mongodb.connection-url=${ENV:MONGO_URI}
